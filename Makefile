@@ -34,7 +34,7 @@ CFLAGS                  += -D_RTE_=1
 # If set, disables asserts and debugging, enables optimization
 RELEASE_BUILD           ?= 0
 
-USE_LLL_LOGGING         ?= 1
+USE_LLL_LOGGING         ?= 0
 
 ifeq ($(USE_LLL_LOGGING),1)
     # Set the lll verbosity base level

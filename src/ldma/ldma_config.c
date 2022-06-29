@@ -13,9 +13,9 @@
 
 #include "em_cmu.h"
 #include "ldma_config.h"
+#include "platform.h"   // LED functions.
 
-osThreadId_t ldma_ready_callback_thread;
-uint32_t ldma_ready_flag;
+static volatile ldma_irq_callback_t ldma_callback;
 
 /**
  * @brief LDMA IRQ handler.
@@ -35,18 +35,24 @@ void LDMA_IRQHandler(void)
     {
         /* Clear interrupt flag. */
         LDMA->IFC = ACC_LDMA_CHANNEL_UART_MASK;
-        osThreadFlagsSet(ldma_ready_callback_thread, ldma_ready_flag);
+        
+        // Notify transfer done, stop LDMA module if transfer done was late.
+        if(ldma_callback())
+        {
+            // Serial write was late!
+            LDMA_IntDisable(ACC_LDMA_CHANNEL_UART_MASK);
+            ldma_uart_stop();
+            PLATFORM_LedsSet(PLATFORM_LedsGet() | 0x02);
+        }
     }
 }
 
 /**
  * @brief Initialize the LDMA controller.
  */
-void ldma_init (osThreadId_t thread_id, uint32_t thread_flag)
+void ldma_init ()
 {
     LDMA_Init_t init = LDMA_INIT_DEFAULT; // Only priority based arbitration, no round-robin.
-    ldma_ready_callback_thread = thread_id;
-    ldma_ready_flag = thread_flag;
     
     CMU_ClockEnable(cmuClock_LDMA, true);
     
@@ -59,8 +65,11 @@ void ldma_init (osThreadId_t thread_id, uint32_t thread_flag)
 /**
  * @brief Start LDMA for memory to UART transfer.
  */
-void ldma_uart_start(LDMA_Descriptor_t* uartDescriptor)
+void ldma_uart_start(LDMA_Descriptor_t* uartDescriptor, ldma_irq_callback_t callback)
 {
+    // Callback called from LDMA interrupt handler.
+    ldma_callback = callback;
+    
     LDMA_TransferCfg_t memToUartCfg = LDMA_TRANSFER_CFG_PERIPHERAL(CNF_LDMA_PERIPHERAL_SIGNAL);
 
     LDMA_IntEnable(ACC_LDMA_CHANNEL_UART_MASK);

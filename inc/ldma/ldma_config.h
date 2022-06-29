@@ -27,8 +27,10 @@
     #error "Unknown USART used for logging. Check retargetserialconfig.h."
 #endif
 
-void ldma_init (osThreadId_t thread_id, uint32_t thread_flag);
-void ldma_uart_start (LDMA_Descriptor_t* uartDescriptor);
+typedef bool (*ldma_irq_callback_t)();
+
+void ldma_init ();
+void ldma_uart_start (LDMA_Descriptor_t* uartDescriptor, ldma_irq_callback_t callback);
 void ldma_uart_stop ();
 bool ldma_busy ();
 

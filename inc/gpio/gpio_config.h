@@ -13,8 +13,6 @@
 #include "cmsis_os2.h"
 #include "i2c_config.h" // Include I2C SDA and SCL port and pins
 
-
-
 #if BOARD_NAME == smnt-mb
     #define GPIO_EXTI_NUM           0x00000001UL    // GPIO external interrupt number (index)
     #define GPIO_IF_EXTI_NUM        0x00000002UL    // Interrupt flag bit for external interrupt GPIO_EXTI_NUM
