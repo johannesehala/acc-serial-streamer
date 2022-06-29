@@ -103,10 +103,11 @@ SOURCES += src/i2c/i2c_config.c \
            src/gpio/gpio_config.c \
            src/mma8653fc/mma8653fc_driver.c
 
+#TODO a nice lll version would be good
 ifeq ($(USE_LLL_LOGGING),1)
-    SOURCES += rmain_lll.c
+    SOURCES += main_ldma.c
 else
-    SOURCES += rmain_ldma.c \
+    SOURCES += main_ldma.c \
                src/ldma/ldma_config.c \
                src/ldma/ldma_descriptors.c
 endif

@@ -1,13 +1,26 @@
 /**
- * Receive lots of messages over radio and 
- * signal alarm if messages are dropped or missed.
+ * @brief   Communicates with accelerometer over I2C protocol. Writes results to
+ *          log output or sends constant data stream to serial.
  *
- * Possible speed gains:
- *  - let ldma do ntoh conversion (This is done already)
- *  - use higher serial speed
- *  - don't defer msg handling to thread, use ldma from receive msg 
- *    interrupt (cuz queue does two copy operations)
+ *          To stream accelerometer x, y, z axis data to serial, turn off logging, 
+ *          and turn on LDMA. x, y, z axis data is int16_t type and data is sent
+ *          in sequence x1, x2, x3, ... y1, y2, y3 ... z1, z2, z3 ...
  *
+ *          Data is transfed per frame. NUM_ELEMENTS_IN_DATA_FRAME determines frame
+ *          size. A token is sent before each data frame.
+ *
+ * @note    Data transfer over serial is initiated when one of the two data buffers
+ *          is filled. Depending on the chosen data rate and buffer size, this may
+ *          take a lot of time. It is reccomended you adjust your data buffer size 
+ *          (NUM_ELEMENTS_IN_DATA_FRAME) to suit your data rate.
+ * 
+ * @note    If you are using this application for streaming accelerometer readout
+ *          to PC, then use convert_to_count() function and stream 'count' values to 
+ *          serial. Using convert_to_g() changes value type from int16_t to float
+ *          and float values are difficult to send over serial correctly. 
+ 
+ * @Datasheet https://www.nxp.com/docs/en/data-sheet/MMA8653FC.pdf
+ * 
  * Copyright Thinnect Inc. 2019
  * Copyright Proactivity-Lab, Taltech 2022
  * @license MIT
@@ -70,13 +83,10 @@ static void data_acquisition_loop (void *args)
     #define DATA_WAIT_TIME      3 // Time to wait for data before timeout, seconds.
     
     xyz_rawdata_t rawData;
-    static uint8_t res;
     static xyz_buf_select_t buf_filling = BUF_1;
     static uint16_t buf_index = 0;
     static bool trigger_transmit = false;
     static uint32_t flags;
-    
-    osDelay(1500);
 
     // Initialize and enable I2C.
     i2c_init();
@@ -86,30 +96,19 @@ static void data_acquisition_loop (void *args)
     set_sensor_standby();
 
     // Configure sensor for xyz data acquisition.
-    res = configure_xyz_data(MMA8653FC_CTRL_REG1_DR_800HZ, MMA8653FC_XYZ_DATA_CFG_2G_RANGE, MMA8653FC_CTRL_REG2_POWMOD_LOWPOW);
-    //if(res != 0)debug1("Sensor conf failed");
-    
+    configure_xyz_data(SENSOR_SAMPLING_SPEED, SENSOR_DATA_RANGE, SENSOR_SAMPLING_POWER_MODE);
+
     // Configure sensor to generate interrupt when new data becomes ready.
-    res = configure_interrupt(MMA8653FC_CTRL_REG3_POLARITY_LOW, MMA8653FC_CTRL_REG3_PINMODE_PP, 
+    configure_interrupt(MMA8653FC_CTRL_REG3_POLARITY_LOW, MMA8653FC_CTRL_REG3_PINMODE_PP, 
             (MMA8653FC_CTRL_REG4_DRDY_INT_EN << MMA8653FC_CTRL_REG4_DRDY_INT_SHIFT), 
             (MMA8653FC_CTRL_REG5_DRDY_INTSEL_INT1<< MMA8653FC_CTRL_REG5_DRDY_INTSEL_SHIFT));
-    //if(res != 0)debug1("Sensor conf failed");
-    
+
     // Configure GPIO for external interrupts and enable external interrupts.
     gpio_external_interrupt_init();
     gpio_external_interrupt_enable(osThreadGetId(), DATA_READY_FLAG);
 
-    //info("ctrl_1 %x", read_whoami(MMA8653FC_REGADDR_CTRL_REG1));
-    //info("ctrl_2 %x", read_whoami(MMA8653FC_REGADDR_CTRL_REG2));
-    //info("ctrl_3 %x", read_whoami(MMA8653FC_REGADDR_CTRL_REG3));
-    //info("ctrl_4 %x", read_whoami(MMA8653FC_REGADDR_CTRL_REG4));
-    //info("ctrl_5 %x", read_whoami(MMA8653FC_REGADDR_CTRL_REG5));
-    //info("data_cfg %x", read_whoami(MMA8653FC_REGADDR_XYZ_DATA_CFG));
-    //info("whoami %x", read_whoami(MMA8653FC_REGADDR_WHO_AM_I));
-
     // Activate sensor.
     set_sensor_active();
-    //info("ctrl_1 %x", read_whoami(MMA8653FC_REGADDR_CTRL_REG1));
     
     for (;;)
     {
@@ -248,7 +247,7 @@ static bool transfer_was_late ()
     if (transmit_late);
     else
     {
-        osThreadFlagsSet(transfer_thread_id, 0x00000001U);
+        osThreadFlagsSet(transfer_thread_id, START_TRANSFER_FLAG);
     }
     return transmit_late;
 }
@@ -294,17 +293,17 @@ static void data_transfer_loop (void *args)
                 switch (transfer_type_select)
                 {
                     case X_AXIS :
-                        p_descriptor = data_descriptor_config((uint32_t*)&buf1_x, NUM_ELEMENTS_IN_DATA_FRAME);
+                        p_descriptor = data_descriptor_config((uint32_t*)&buf1_x, NUM_ELEMENTS_IN_DATA_FRAME * 2);
                         transfer_type_select--;
                         break;
                         
                     case Y_AXIS :
-                        p_descriptor = data_descriptor_config((uint32_t*)&buf1_y, NUM_ELEMENTS_IN_DATA_FRAME);
+                        p_descriptor = data_descriptor_config((uint32_t*)&buf1_y, NUM_ELEMENTS_IN_DATA_FRAME * 2);
                         transfer_type_select--;
                         break;
                         
                     case Z_AXIS :
-                        p_descriptor = data_descriptor_config((uint32_t*)&buf1_z, NUM_ELEMENTS_IN_DATA_FRAME);
+                        p_descriptor = data_descriptor_config((uint32_t*)&buf1_z, NUM_ELEMENTS_IN_DATA_FRAME * 2);
                         transfer_type_select--;
                         break;
                         
@@ -313,8 +312,7 @@ static void data_transfer_loop (void *args)
                         break;
                     
                     case TOKEN :
-                        // TODO use sizeof(token)
-                        p_descriptor = token_descriptor_config((uint32_t*)token, 4);
+                        p_descriptor = token_descriptor_config((uint32_t*)token, sizeof(token));
                         transfer_type_select--;
                         break;
                     
@@ -327,17 +325,17 @@ static void data_transfer_loop (void *args)
                 switch (transfer_type_select)
                 {
                     case X_AXIS :
-                        p_descriptor = data_descriptor_config((uint32_t*)&buf2_x, NUM_ELEMENTS_IN_DATA_FRAME);
+                        p_descriptor = data_descriptor_config((uint32_t*)&buf2_x, NUM_ELEMENTS_IN_DATA_FRAME * 2);
                         transfer_type_select--;
                         break;
                         
                     case Y_AXIS :
-                        p_descriptor = data_descriptor_config((uint32_t*)&buf2_y, NUM_ELEMENTS_IN_DATA_FRAME);
+                        p_descriptor = data_descriptor_config((uint32_t*)&buf2_y, NUM_ELEMENTS_IN_DATA_FRAME * 2);
                         transfer_type_select--;
                         break;
                         
                     case Z_AXIS :
-                        p_descriptor = data_descriptor_config((uint32_t*)&buf2_z, NUM_ELEMENTS_IN_DATA_FRAME);
+                        p_descriptor = data_descriptor_config((uint32_t*)&buf2_z, NUM_ELEMENTS_IN_DATA_FRAME * 2);
                         transfer_type_select--;
                         break;
                         
@@ -346,8 +344,7 @@ static void data_transfer_loop (void *args)
                         break;
                     
                     case TOKEN :
-                        // TODO use sizeof(token)
-                        p_descriptor = token_descriptor_config((uint32_t*)token, 4);
+                        p_descriptor = token_descriptor_config((uint32_t*)token, sizeof(token));
                         transfer_type_select--;
                         break;
                     
@@ -358,7 +355,11 @@ static void data_transfer_loop (void *args)
             else ; // Unknown transmit buffer identifier.
             
             if(!xyz_transmit_done)ldma_uart_start(p_descriptor, transfer_was_late);
-            else PLATFORM_LedsSet(PLATFORM_LedsGet() | 0x01);
+            else 
+            {
+                PLATFORM_LedsSet(PLATFORM_LedsGet() ^ 0x01);
+                transfer_type_select = TOKEN;
+            }
         }
         else if(flags == osFlagsErrorTimeout)
         {
@@ -379,7 +380,6 @@ void hb_loop ()
     for (;;)
     {
         osDelay(10*osKernelGetTickFreq()); // 10 sec
-        //info1("Heartbeat");
     }
 }
 
